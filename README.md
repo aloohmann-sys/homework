@@ -73,7 +73,7 @@ Please keep a record of the changes you make and why you make them. Preferably, 
 - Keep the controller focused on HTTP input and output. Preserve the existing routes while the internals are refactored, avoiding an unrelated API migration.
 - Use a dispatcher to select a channel handler by normalized notification type, keeping channel-specific sending out of orchestration.
 - Put recipient checks and the repeated-failure rejection rule in an enforcement service. Check recipients before recording a dispatch; check the circuit breaker after opening a dispatch so rejected attempts remain in history.
-- Move SQL and row mapping behind a repository. The orchestration service coordinates enforcement, dispatch, and persistence without owning JDBC details.
+- Use Hibernate/JPA entities and a Spring Data repository for persistence. The orchestration service coordinates enforcement, dispatch, and persistence without owning database details; Hibernate validates the schema initialized from `schema.sql`.
 - Retain the existing response shape and database behavior during this refactor. Defer schema/API redesign and bonus features unless needed to preserve the acceptance criteria.
 
 ## Implementation note

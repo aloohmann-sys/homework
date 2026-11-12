@@ -1,163 +1,134 @@
 package com.example.homework.notification;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 @Repository
 class NotificationRepository {
 
-  private final JdbcTemplate jdbcTemplate;
-  private final RowMapper<LegacyNotificationResponse> rowMapper = new RowMapper<LegacyNotificationResponse>() {
-    @Override
-    public LegacyNotificationResponse mapRow(ResultSet rs, int rowNum) throws SQLException {
-      LegacyNotificationResponse response = new LegacyNotificationResponse();
-      response.setId(rs.getLong("id"));
-      response.setType(rs.getString("notification_type"));
-      response.setTarget(rs.getString("recipient"));
-      response.setPayload(rs.getString("payload"));
-      response.setStatus(rs.getString("status"));
-      response.setFailureCount(rs.getInt("failure_count"));
-      response.setDispatchCount(rs.getInt("dispatch_count"));
-      response.setBlocked("Y".equals(rs.getString("is_blocked")) ? "Y" : "N");
-      response.setMessage(rs.getString("message"));
-      response.setCreatedAt(rs.getTimestamp("created_at"));
-      response.setUpdatedAt(rs.getTimestamp("updated_at"));
-      return response;
-    }
-  };
+  private final NotificationDispatchJpaRepository dispatches;
 
-  NotificationRepository(JdbcTemplate jdbcTemplate) {
-    this.jdbcTemplate = jdbcTemplate;
+  NotificationRepository(NotificationDispatchJpaRepository dispatches) {
+    this.dispatches = dispatches;
   }
 
-  boolean isRecipientBlockedOrRateLimited(String target) {
-    if (target != null && target.toLowerCase().contains("blocked")) {
+  boolean isRecipientBlockedOrRateLimited(String recipient) {
+    if (recipient != null && recipient.toLowerCase().contains("blocked")) {
       return true;
     }
 
-    Integer recentCount = jdbcTemplate.queryForObject(
-        "select count(*) "
-            + "from notification_dispatches "
-            + "where recipient = ? "
-            + "  and created_at >= dateadd('minute', -1, current_timestamp)",
-        Integer.class,
-        target);
-    return recentCount != null && recentCount.intValue() >= 3;
+    Timestamp since = Timestamp.from(Instant.now().minus(1, ChronoUnit.MINUTES));
+    return dispatches.countByRecipientAndCreatedAtGreaterThanEqual(recipient, since) >= 3;
   }
 
-  long openDispatch(String type, String target, String payload) {
-    long id = getNextId();
-    int nextDispatchCount = getTotalDispatches() + 1;
-    int currentFailureCount = getFailureCount();
-    String blocked = target != null && target.toLowerCase().contains("blocked") ? "Y" : "N";
+  long openDispatch(String type, String recipient, String payload) {
+    NotificationDispatchEntity latest = latestEntity();
+    long id = latest == null ? 1L : latest.getId().longValue() + 1L;
+    int dispatchCount = latest == null ? 1 : latest.getDispatchCount() + 1;
+    int failureCount = latest == null ? 0 : latest.getFailureCount();
+    String blocked = recipient != null && recipient.toLowerCase().contains("blocked") ? "Y" : "N";
     Timestamp now = new Timestamp(System.currentTimeMillis());
 
-    jdbcTemplate.update(
-        "insert into notification_dispatches("
-            + "id, notification_type, recipient, payload, status, failure_count, dispatch_count, "
-            + "is_blocked, message, created_at, updated_at) "
-            + "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    NotificationDispatchEntity dispatch = new NotificationDispatchEntity(
         Long.valueOf(id),
         type,
-        target,
+        recipient,
         payload,
         "N",
-        Integer.valueOf(currentFailureCount),
-        Integer.valueOf(nextDispatchCount),
+        failureCount,
+        dispatchCount,
         blocked,
         "START",
         now,
         now);
+    dispatches.saveAndFlush(dispatch);
     return id;
   }
 
   int getFailureCount() {
-    List<Integer> results = jdbcTemplate.query(
-        "select failure_count from notification_dispatches order by id desc limit 1",
-        (resultSet, rowNum) -> Integer.valueOf(resultSet.getInt(1)));
-    return results.isEmpty() ? 0 : results.get(0).intValue();
+    NotificationDispatchEntity latest = latestEntity();
+    return latest == null ? 0 : latest.getFailureCount();
   }
 
-  void recordFailure(long id, String target, String error) {
-    int nextFailureCount = getFailureCount() + 1;
-    jdbcTemplate.update(
-        "update notification_dispatches "
-            + "set status = ?, failure_count = ?, message = ?, updated_at = ? where id = ?",
-        "E",
-        Integer.valueOf(nextFailureCount),
-        shorten(error),
-        new Timestamp(System.currentTimeMillis()),
-        Long.valueOf(id));
-    System.out.println("[DB AUDIT] Inserted failure record for " + target + ": " + error);
+  void recordFailure(long id, String recipient, String error) {
+    NotificationDispatchEntity dispatch = dispatch(id);
+    NotificationDispatchEntity latest = latestEntity();
+    int nextFailureCount = (latest == null ? 0 : latest.getFailureCount()) + 1;
+    dispatch.setStatus("E");
+    dispatch.setFailureCount(nextFailureCount);
+    dispatch.setMessage(shorten(error));
+    dispatch.setUpdatedAt(new Timestamp(System.currentTimeMillis()));
+    dispatches.saveAndFlush(dispatch);
+    System.out.println("[DB AUDIT] Inserted failure record for " + recipient + ": " + error);
   }
 
   void recordSuccess(long id) {
-    jdbcTemplate.update(
-        "update notification_dispatches "
-            + "set status = ?, failure_count = ?, message = ?, updated_at = ? where id = ?",
-        "S",
-        Integer.valueOf(0),
-        "SENT",
-        new Timestamp(System.currentTimeMillis()),
-        Long.valueOf(id));
+    NotificationDispatchEntity dispatch = dispatch(id);
+    dispatch.setStatus("S");
+    dispatch.setFailureCount(0);
+    dispatch.setMessage("SENT");
+    dispatch.setUpdatedAt(new Timestamp(System.currentTimeMillis()));
+    dispatches.saveAndFlush(dispatch);
   }
 
   void recordUnsupportedType(long id, String type) {
-    jdbcTemplate.update(
-        "update notification_dispatches set status = ?, message = ?, updated_at = ? where id = ?",
-        "U",
-        shorten("Unsupported type: " + type),
-        new Timestamp(System.currentTimeMillis()),
-        Long.valueOf(id));
+    NotificationDispatchEntity dispatch = dispatch(id);
+    dispatch.setStatus("U");
+    dispatch.setMessage(shorten("Unsupported type: " + type));
+    dispatch.setUpdatedAt(new Timestamp(System.currentTimeMillis()));
+    dispatches.saveAndFlush(dispatch);
   }
 
   void recordRejection(long id, String message) {
-    jdbcTemplate.update(
-        "update notification_dispatches set status = ?, message = ?, updated_at = ? where id = ?",
-        "R",
-        shorten(message),
-        new Timestamp(System.currentTimeMillis()),
-        Long.valueOf(id));
+    NotificationDispatchEntity dispatch = dispatch(id);
+    dispatch.setStatus("R");
+    dispatch.setMessage(shorten(message));
+    dispatch.setUpdatedAt(new Timestamp(System.currentTimeMillis()));
+    dispatches.saveAndFlush(dispatch);
   }
 
   LegacyNotificationResponse getLatestState() {
-    List<LegacyNotificationResponse> items = jdbcTemplate.query(
-        "select * from notification_dispatches order by id desc limit 1",
-        rowMapper);
-    return items.isEmpty() ? null : items.get(0);
+    NotificationDispatchEntity latest = latestEntity();
+    return latest == null ? null : toResponse(latest);
   }
 
   LegacyNotificationResponse getDispatchById(long id) {
-    return jdbcTemplate.queryForObject(
-        "select * from notification_dispatches where id = ?",
-        rowMapper,
-        Long.valueOf(id));
+    return toResponse(dispatch(id));
   }
 
   List<LegacyNotificationResponse> getHistory() {
-    return jdbcTemplate.query(
-        "select * from notification_dispatches order by id desc limit 20",
-        rowMapper);
+    return dispatches.findTop20ByOrderByIdDesc().stream()
+        .map(this::toResponse)
+        .toList();
   }
 
-  private long getNextId() {
-    Long maxId = jdbcTemplate.queryForObject(
-        "select coalesce(max(id), 0) from notification_dispatches",
-        Long.class);
-    return (maxId == null ? 0L : maxId.longValue()) + 1L;
+  private NotificationDispatchEntity dispatch(long id) {
+    return dispatches.findById(Long.valueOf(id))
+        .orElseThrow(() -> new IllegalArgumentException("Notification dispatch not found: " + id));
   }
 
-  private int getTotalDispatches() {
-    Integer latestDispatchCount = jdbcTemplate.queryForObject(
-        "select coalesce(max(dispatch_count), 0) from notification_dispatches",
-        Integer.class);
-    return latestDispatchCount == null ? 0 : latestDispatchCount.intValue();
+  private NotificationDispatchEntity latestEntity() {
+    return dispatches.findFirstByOrderByIdDesc().orElse(null);
+  }
+
+  private LegacyNotificationResponse toResponse(NotificationDispatchEntity dispatch) {
+    LegacyNotificationResponse response = new LegacyNotificationResponse();
+    response.setId(dispatch.getId().longValue());
+    response.setType(dispatch.getType());
+    response.setTarget(dispatch.getRecipient());
+    response.setPayload(dispatch.getPayload());
+    response.setStatus(dispatch.getStatus());
+    response.setFailureCount(dispatch.getFailureCount());
+    response.setDispatchCount(dispatch.getDispatchCount());
+    response.setBlocked(dispatch.getBlocked());
+    response.setMessage(dispatch.getMessage());
+    response.setCreatedAt(dispatch.getCreatedAt());
+    response.setUpdatedAt(dispatch.getUpdatedAt());
+    return response;
   }
 
   private String shorten(String value) {
