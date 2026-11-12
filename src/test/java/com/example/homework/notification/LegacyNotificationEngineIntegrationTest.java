@@ -1,6 +1,7 @@
 package com.example.homework.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +20,7 @@ public class LegacyNotificationEngineIntegrationTest {
   public void emailSuccessIsStoredAsSent() throws Exception {
     LegacyNotificationResponse response = engine.processNotification("EMAIL", "buyer@example.com", "hello");
 
+    assertThat(response.getType()).isEqualTo("EMAIL");
     assertThat(response.getStatus()).isEqualTo("S");
     assertThat(response.getDispatchCount()).isEqualTo(1);
     assertThat(response.getFailureCount()).isZero();
@@ -26,13 +28,47 @@ public class LegacyNotificationEngineIntegrationTest {
   }
 
   @Test
+  public void notificationTypeIsTrimmedAndNormalized() throws Exception {
+    LegacyNotificationResponse response = engine.processNotification(" email ", "buyer@example.com", "hello");
+
+    assertThat(response.getType()).isEqualTo("EMAIL");
+    assertThat(response.getStatus()).isEqualTo("S");
+  }
+
+  @Test
   public void smsAndPushSuccessesAreStoredAsSent() throws Exception {
     LegacyNotificationResponse smsResponse = engine.processNotification("SMS", "sms-user@example.com", "hello");
     LegacyNotificationResponse pushResponse = engine.processNotification("PUSH", "push-user@example.com", "hello");
 
+    assertThat(smsResponse.getType()).isEqualTo("SMS");
+    assertThat(pushResponse.getType()).isEqualTo("PUSH");
     assertThat(smsResponse.getStatus()).isEqualTo("S");
     assertThat(pushResponse.getStatus()).isEqualTo("S");
     assertThat(engine.getHistory()).hasSize(2);
+  }
+
+  @Test
+  public void emailFailureIsStoredWithFailureDetails() {
+    assertThatThrownBy(() -> engine.processNotification("EMAIL", "error-user@example.com", "boom"))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessage("SMTP Timeout");
+
+    LegacyNotificationResponse latest = engine.getLatestState();
+    assertThat(latest.getStatus()).isEqualTo("E");
+    assertThat(latest.getFailureCount()).isEqualTo(1);
+    assertThat(latest.getMessage()).isEqualTo("SMTP Timeout");
+  }
+
+  @Test
+  public void successfulDispatchResetsFailureCount() throws Exception {
+    assertThatThrownBy(() -> engine.processNotification("EMAIL", "error-user@example.com", "boom"))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessage("SMTP Timeout");
+
+    LegacyNotificationResponse response = engine.processNotification("SMS", "sms-user@example.com", "hello");
+
+    assertThat(response.getStatus()).isEqualTo("S");
+    assertThat(response.getFailureCount()).isZero();
   }
 
   @Test
@@ -92,6 +128,7 @@ public class LegacyNotificationEngineIntegrationTest {
     LegacyNotificationResponse latest = engine.getLatestState();
     assertThat(latest.getStatus()).isEqualTo("U");
     assertThat(latest.getMessage()).isEqualTo("Unsupported type: FAX");
+    assertThat(latest.getFailureCount()).isZero();
   }
 
   @Test
