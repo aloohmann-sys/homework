@@ -61,6 +61,25 @@ We care about:
 
 Please keep a record of the changes you make and why you make them. Preferably, use small, meaningful Git commits with messages that explain both the change and its rationale. Brief notes in the README can supplement the commit history, especially for trade-offs or alternatives you considered.
 
+## Refactor acceptance criteria
+
+- Valid requests for `EMAIL`, `SMS`, and `PUSH` are dispatched and their outcomes are recorded.
+- A missing or blank target is rejected; blocked and rate-limited targets are rejected before a dispatch is recorded.
+- Unsupported notification types fail clearly and the attempt is recorded as unsupported.
+- A failed dispatch is recorded as a failure. After three failures, the next attempt is recorded as rejected without dispatch.
+
+## Refactor design
+
+- Keep the controller focused on HTTP input and output. Preserve the existing routes while the internals are refactored, avoiding an unrelated API migration.
+- Use a dispatcher to select a channel handler by normalized notification type, keeping channel-specific sending out of orchestration.
+- Put recipient checks and the repeated-failure rejection rule in an enforcement service. Check recipients before recording a dispatch; check the circuit breaker after opening a dispatch so rejected attempts remain in history.
+- Move SQL and row mapping behind a repository. The orchestration service coordinates enforcement, dispatch, and persistence without owning JDBC details.
+- Retain the existing response shape and database behavior during this refactor. Defer schema/API redesign and bonus features unless needed to preserve the acceptance criteria.
+
+## Implementation note
+
+The failure counter is global. Once it reaches three, all further attempts are rejected before delivery, so it cannot reset through a successful dispatch; recovery requires an external counter reset. This existing policy was preserved rather than silently changed during the structural refactor.
+
 ## Constraints
 
 The solution must use Java and Spring Boot. You may upgrade the Java version and dependencies.
