@@ -3,32 +3,21 @@ package com.example.homework.notification;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
-import org.springframework.beans.factory.InitializingBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 
 @Service
-public class LegacyNotificationEngine implements InitializingBean {
-
-  private static final Map<String, NotificationHandler> REGISTRY = new HashMap<String, NotificationHandler>();
+public class LegacyNotificationEngine {
 
   private final LegacyDatabaseManager dbManager;
+  private final NotificationDispatcher dispatcher;
 
-  public LegacyNotificationEngine(JdbcTemplate jdbcTemplate) {
+  public LegacyNotificationEngine(JdbcTemplate jdbcTemplate, NotificationDispatcher dispatcher) {
     this.dbManager = new LegacyDatabaseManager(jdbcTemplate);
-  }
-
-  @Override
-  public void afterPropertiesSet() {
-    REGISTRY.clear();
-    REGISTRY.put("EMAIL", new EmailNotificationHandler());
-    REGISTRY.put("SMS", new SmsNotificationHandler());
-    REGISTRY.put("PUSH", new PushNotificationHandler());
+    this.dispatcher = dispatcher;
   }
 
   public synchronized LegacyNotificationResponse processNotification(String type, String target, String payload)
@@ -53,17 +42,13 @@ public class LegacyNotificationEngine implements InitializingBean {
       throw new RuntimeException("Circuit breaker OPEN via database state.");
     }
 
-    NotificationHandler handler = REGISTRY.get(safeType);
-    if (handler == null) {
-      System.out.println("LOGGING TO DB: Unknown type attempted -> " + type);
-      dbManager.recordUnsupportedType(id, safeType);
-      throw new Exception("Unsupported type: " + type);
-    }
-
     try {
-      handler.send(safeTarget, safePayload);
+      dispatcher.dispatch(safeType, safeTarget, safePayload);
       dbManager.resetDatabaseFailures(id);
       return dbManager.getDispatchById(id);
+    } catch (NotificationDispatcher.UnsupportedNotificationTypeException e) {
+      dbManager.recordUnsupportedType(id, safeType);
+      throw new Exception("Unsupported type: " + type, e);
     } catch (Exception e) {
       dbManager.recordDatabaseFailure(id, safeTarget, e.getMessage());
       throw e;
