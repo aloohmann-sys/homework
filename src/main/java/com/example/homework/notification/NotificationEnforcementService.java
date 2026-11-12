@@ -9,10 +9,10 @@ class NotificationEnforcementService {
       "Business Rule Violation: User is blacklisted or rate-limited by DB policy.";
   private static final String CIRCUIT_BREAKER_MESSAGE = "Circuit breaker OPEN via database state.";
 
-  private final LegacyNotificationEngine.LegacyDatabaseManager dbManager;
+  private final NotificationRepository repository;
 
-  NotificationEnforcementService(LegacyNotificationEngine.LegacyDatabaseManager dbManager) {
-    this.dbManager = dbManager;
+  NotificationEnforcementService(NotificationRepository repository) {
+    this.repository = repository;
   }
 
   void validateTarget(String target) {
@@ -20,14 +20,14 @@ class NotificationEnforcementService {
       throw new IllegalArgumentException("Target is mandatory.");
     }
 
-    if (dbManager.isUserBlacklistedOrRateLimited(target)) {
+    if (repository.isRecipientBlockedOrRateLimited(target)) {
       throw new RuntimeException(RECIPIENT_REJECTION_MESSAGE);
     }
   }
 
   void rejectIfCircuitBreakerIsOpen(long dispatchId) {
-    if (dbManager.getFailureCountFromDatabase() >= 3) {
-      dbManager.markAsSkipped(dispatchId, CIRCUIT_BREAKER_MESSAGE);
+    if (repository.getFailureCount() >= 3) {
+      repository.recordRejection(dispatchId, CIRCUIT_BREAKER_MESSAGE);
       throw new RuntimeException(CIRCUIT_BREAKER_MESSAGE);
     }
   }
