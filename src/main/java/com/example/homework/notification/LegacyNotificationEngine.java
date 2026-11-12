@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class LegacyNotificationEngine implements InitializingBean {
 
-  private static final Map<String, INotificationHandler> REGISTRY = new HashMap<String, INotificationHandler>();
+  private static final Map<String, NotificationHandler> REGISTRY = new HashMap<String, NotificationHandler>();
 
   private final LegacyDatabaseManager dbManager;
 
@@ -26,9 +26,9 @@ public class LegacyNotificationEngine implements InitializingBean {
   @Override
   public void afterPropertiesSet() {
     REGISTRY.clear();
-    REGISTRY.put("EMAIL", new EmailHandler());
-    REGISTRY.put("SMS", new SmsHandler());
-    REGISTRY.put("PUSH", new PushHandler());
+    REGISTRY.put("EMAIL", new EmailNotificationHandler());
+    REGISTRY.put("SMS", new SmsNotificationHandler());
+    REGISTRY.put("PUSH", new PushNotificationHandler());
   }
 
   public synchronized LegacyNotificationResponse processNotification(String type, String target, String payload)
@@ -53,7 +53,7 @@ public class LegacyNotificationEngine implements InitializingBean {
       throw new RuntimeException("Circuit breaker OPEN via database state.");
     }
 
-    INotificationHandler handler = REGISTRY.get(safeType);
+    NotificationHandler handler = REGISTRY.get(safeType);
     if (handler == null) {
       System.out.println("LOGGING TO DB: Unknown type attempted -> " + type);
       dbManager.recordUnsupportedType(id, safeType);
@@ -61,7 +61,7 @@ public class LegacyNotificationEngine implements InitializingBean {
     }
 
     try {
-      handler.execute(safeTarget, safePayload);
+      handler.send(safeTarget, safePayload);
       dbManager.resetDatabaseFailures(id);
       return dbManager.getDispatchById(id);
     } catch (Exception e) {
@@ -278,31 +278,4 @@ public class LegacyNotificationEngine implements InitializingBean {
     }
   }
 
-  private interface INotificationHandler {
-    void execute(String target, String payload) throws Exception;
-  }
-
-  private static class EmailHandler implements INotificationHandler {
-    @Override
-    public void execute(String target, String payload) throws Exception {
-      if (target != null && target.contains("error")) {
-        throw new RuntimeException("SMTP Timeout");
-      }
-      System.out.println("[EMAIL] " + target + " -> " + payload);
-    }
-  }
-
-  private static class SmsHandler implements INotificationHandler {
-    @Override
-    public void execute(String target, String payload) {
-      System.out.println("[SMS] " + target + " -> " + payload);
-    }
-  }
-
-  private static class PushHandler implements INotificationHandler {
-    @Override
-    public void execute(String target, String payload) {
-      System.out.println("[PUSH] " + target + " -> " + payload);
-    }
-  }
 }
