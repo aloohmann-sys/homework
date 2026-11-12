@@ -7,6 +7,7 @@ import java.util.List;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.stereotype.Repository;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -14,10 +15,15 @@ public class LegacyNotificationEngine {
 
   private final LegacyDatabaseManager dbManager;
   private final NotificationDispatcher dispatcher;
+  private final NotificationEnforcementService enforcementService;
 
-  public LegacyNotificationEngine(JdbcTemplate jdbcTemplate, NotificationDispatcher dispatcher) {
-    this.dbManager = new LegacyDatabaseManager(jdbcTemplate);
+  public LegacyNotificationEngine(
+      LegacyDatabaseManager dbManager,
+      NotificationDispatcher dispatcher,
+      NotificationEnforcementService enforcementService) {
+    this.dbManager = dbManager;
     this.dispatcher = dispatcher;
+    this.enforcementService = enforcementService;
   }
 
   public synchronized LegacyNotificationResponse processNotification(String type, String target, String payload)
@@ -27,20 +33,10 @@ public class LegacyNotificationEngine {
     String safeTarget = target != null ? target.trim() : null;
     String safePayload = payload != null ? payload : "";
 
-    if (safeTarget == null || safeTarget.length() == 0) {
-      throw new IllegalArgumentException("Target is mandatory.");
-    }
-
-    if (dbManager.isUserBlacklistedOrRateLimited(safeTarget)) {
-      throw new RuntimeException("Business Rule Violation: User is blacklisted or rate-limited by DB policy.");
-    }
+    enforcementService.validateTarget(safeTarget);
 
     long id = dbManager.openDispatch(safeType, safeTarget, safePayload);
-
-    if (dbManager.getFailureCountFromDatabase() >= 3) {
-      dbManager.markAsSkipped(id, "Circuit breaker OPEN via database state.");
-      throw new RuntimeException("Circuit breaker OPEN via database state.");
-    }
+    enforcementService.rejectIfCircuitBreakerIsOpen(id);
 
     try {
       dispatcher.dispatch(safeType, safeTarget, safePayload);
@@ -63,6 +59,7 @@ public class LegacyNotificationEngine {
     return dbManager.getLatestState();
   }
 
+  @Repository
   public static class LegacyDatabaseManager {
 
     private final JdbcTemplate jdbcTemplate;

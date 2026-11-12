@@ -50,6 +50,20 @@ public class LegacyNotificationEngineIntegrationTest {
   }
 
   @Test
+  public void blankTargetIsRejectedBeforeDispatchIsInserted() {
+    try {
+      engine.processNotification("SMS", "  ", "hello");
+      fail("Expected blank target to fail");
+    } catch (IllegalArgumentException ex) {
+      assertThat(ex.getMessage()).isEqualTo("Target is mandatory.");
+    } catch (Exception ex) {
+      fail("Expected IllegalArgumentException but got: " + ex.getClass().getName());
+    }
+
+    assertThat(engine.getHistory()).isEmpty();
+  }
+
+  @Test
   public void rateLimitedTargetIsRejectedBeforeAnotherDispatchIsInserted() throws Exception {
     for (int i = 0; i < 3; i++) {
       engine.processNotification("SMS", "frequent-user@example.com", "hello");
