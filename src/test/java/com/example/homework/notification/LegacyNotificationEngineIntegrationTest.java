@@ -26,6 +26,16 @@ public class LegacyNotificationEngineIntegrationTest {
   }
 
   @Test
+  public void smsAndPushSuccessesAreStoredAsSent() throws Exception {
+    LegacyNotificationResponse smsResponse = engine.processNotification("SMS", "sms-user@example.com", "hello");
+    LegacyNotificationResponse pushResponse = engine.processNotification("PUSH", "push-user@example.com", "hello");
+
+    assertThat(smsResponse.getStatus()).isEqualTo("S");
+    assertThat(pushResponse.getStatus()).isEqualTo("S");
+    assertThat(engine.getHistory()).hasSize(2);
+  }
+
+  @Test
   public void blockedTargetFailsBeforeDispatchIsInserted() {
     try {
       engine.processNotification("SMS", "blocked-user@example.com", "hello");
@@ -37,6 +47,23 @@ public class LegacyNotificationEngineIntegrationTest {
     }
 
     assertThat(engine.getHistory()).isEmpty();
+  }
+
+  @Test
+  public void rateLimitedTargetIsRejectedBeforeAnotherDispatchIsInserted() throws Exception {
+    for (int i = 0; i < 3; i++) {
+      engine.processNotification("SMS", "frequent-user@example.com", "hello");
+    }
+
+    try {
+      engine.processNotification("SMS", "frequent-user@example.com", "hello");
+      fail("Expected rate-limited target to fail");
+    } catch (RuntimeException ex) {
+      assertThat(ex.getMessage())
+          .isEqualTo("Business Rule Violation: User is blacklisted or rate-limited by DB policy.");
+    }
+
+    assertThat(engine.getHistory()).hasSize(3);
   }
 
   @Test
