@@ -65,6 +65,15 @@ Please keep a record of the changes you make and why you make them. Preferably, 
 
 The solution must use Java and Spring Boot. You may upgrade the Java version and dependencies.
 
+## Build and run
+
+The project uses Java 25, Gradle 9.9, and Spring Boot 4.1.2. Use the Gradle wrapper to run the tests or start the application:
+
+```shell
+./gradlew test
+./gradlew bootRun
+```
+
 Everything else may be redesigned or rewritten, including the API, database schema, persistence approach, and project structure, provided the behavior described above is preserved.
 
 Keep the solution proportional to the problem. The goal is to transform a small but messy system into something clean, understandable, and fit for future change.
